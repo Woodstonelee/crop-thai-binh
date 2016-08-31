@@ -1,0 +1,8 @@
+# ipython checkpoints
+**/.ipynb_checkpoints
+
+# output figures
+figures/
+
+# output summary files
+results/
