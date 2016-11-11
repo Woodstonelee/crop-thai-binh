@@ -6,3 +6,14 @@ figures/
 
 # output summary files
 results/
+
+# qsub outputs
+*.e[0-9]*[0-9]
+*.o[0-9]*[0-9]
+*.pe[0-9]*[0-9]
+*.po[0-9]*[0-9]
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
