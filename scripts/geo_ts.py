@@ -47,7 +47,7 @@ def readPixelGdal(filename, x, y):
 
     return dat
 
-def readPixelsGdal(filename, x, y):
+def readPixelsGdal(filename, x=None, y=None):
     """ Reads in multiple pixel of data from an images using GDAL
     Args:
       filename (str): filename to read from
@@ -64,10 +64,16 @@ def readPixelsGdal(filename, x, y):
     dtype = gdal_array.GDALTypeCodeToNumericTypeCode(
         ds.GetRasterBand(1).DataType)
 
-    dat = np.empty((len(x), ds.RasterCount), dtype=dtype)
-    for i in range(ds.RasterCount):
-        tmp = ds.GetRasterBand(i + 1).ReadAsArray()
-        dat[:, i] = tmp[y, x]
+    if ((x is not None) and (y is not None)):
+        dat = np.empty((len(x), ds.RasterCount), dtype=dtype)
+        for i in range(ds.RasterCount):
+            tmp = ds.GetRasterBand(i + 1).ReadAsArray()
+            dat[:, i] = tmp[y, x]
+    else:
+        dat = np.empty((ds.RasterXSize*ds.RasterYSize, ds.RasterCount), dtype=dtype)
+        for i in range(ds.RasterCount):
+            tmp = ds.GetRasterBand(i + 1).ReadAsArray()
+            dat[:, i] = tmp.flatten()
         
     ds = None
 

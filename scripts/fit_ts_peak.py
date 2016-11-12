@@ -45,21 +45,32 @@ def fitTsPeak(ts_file, out_peak_file):
 
     # Read TS data and do quadratic fitting
     ts_meta = gt.getRasterMetaGdal(ts_file)
+    sys.stdout.write('Reading time series data at once ... \n')
+    sys.stdout.flush()
+    ts_data_all = gt.readPixelsGdal(ts_file)
+
     peak_arr = np.zeros((ts_meta['RasterYSize'], ts_meta['RasterXSize']), dtype=np.float32) + no_data
     x = np.arange(ts_meta['RasterXSize'], dtype=np.int32)
     ts_x = np.arange(beg_doy-1, end_doy)
     for row in range(ts_meta['RasterYSize']):
-        print 'Processing line {0:d}'.format(row+1)
-        y = np.zeros_like(x) + row
-        ts_data = gt.readPixelsGdal(ts_file, x, y)
-        
-        peak_x, peak_y, _, max_y = zip(*[quadPeak(ts_x, ts_data[i, ts_x.astype(int)], no_data=no_data) for i in range(len(y))])
-        peak_x = np.array(peak_x)
-        peak_y = np.array(peak_y)
-        max_y = np.array(max_y)
-        valid_ind = reduce(np.logical_and, (peak_x>beg_doy-1, peak_x<end_doy-1, peak_y>=max_y, peak_y!=no_data))
-        peak_y[np.where(np.logical_not(valid_ind))[0]] = no_data
-        peak_arr[y, x] = peak_y
+        sys.stdout.write('Processing line {0:d}\n'.format(row+1))
+        sys.stdout.flush()
+
+        # y = np.zeros_like(x) + row
+        # ts_data = gt.readPixelsGdal(ts_file, x, y)
+        ts_data = ts_data_all[row*ts_meta['RasterXSize']:(row+1)*ts_meta['RasterXSize'], :]
+
+        # # Quadratic fitting        
+        # peak_x, peak_y, _, max_y = zip(*[quadPeak(ts_x, ts_data[i, ts_x.astype(int)], no_data=no_data) for i in range(len(x))])
+        # peak_x = np.array(peak_x)
+        # peak_y = np.array(peak_y)
+        # max_y = np.array(max_y)
+        # valid_ind = reduce(np.logical_and, (peak_x>beg_doy-1, peak_x<end_doy-1, peak_y>=max_y, peak_y!=no_data))
+        # peak_y[np.where(np.logical_not(valid_ind))[0]] = no_data
+        # peak_arr[y, x] = peak_y
+
+        # Simple maximum
+        peak_arr[row, :] = np.max(ts_data, axis=1)
 
     # Save array of peak values to a raster file
     driver = gdal.GetDriverByName('ENVI')
@@ -77,8 +88,15 @@ def fitTsPeak(ts_file, out_peak_file):
     out_ds = None
 
 def main():
-    ts_file = '/home/zhan/Windows-Shared/Workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI'
-    out_peak_file = '/home/zhan/Windows-Shared/Workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI_quadfit_peak.img'
+    # ts_file = '/home/zhan/Windows-Shared/Workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI'
+    # out_peak_file = '/home/zhan/Windows-Shared/Workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI_quadfit_peak.img'
+
+    # ts_file = '/projectnb/echidna/lidar/zhanli86/workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI'
+    # out_peak_file = '/projectnb/echidna/lidar/zhanli86/workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI_quadfit_peak.img'
+
+    ts_file = '/projectnb/echidna/lidar/zhanli86/workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/fit_NDVI'
+    out_peak_file = '/projectnb/echidna/lidar/zhanli86/workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI_max_peak.img'
+
     fitTsPeak(ts_file, out_peak_file)
 
 if __name__=='__main__':
