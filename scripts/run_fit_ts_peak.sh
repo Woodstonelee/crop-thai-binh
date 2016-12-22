@@ -1,7 +1,7 @@
 #!/bin/bash
 #$ -pe omp 4
-#$ -l mem_total=8
-#$ -l h_rt=24:00:00
+#$ -l mem_total=12
+#$ -l h_rt=72:00:00
 #$ -N run-fit-ts-peak
 #$ -V
 #$ -m ae

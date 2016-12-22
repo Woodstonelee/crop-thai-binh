@@ -45,6 +45,7 @@ def fitTsPeak(ts_file, out_peak_file):
 
     # Read TS data and do quadratic fitting
     ts_meta = gt.getRasterMetaGdal(ts_file)
+
     sys.stdout.write('Reading time series data at once ... \n')
     sys.stdout.flush()
     ts_data_all = gt.readPixelsGdal(ts_file)
@@ -56,21 +57,22 @@ def fitTsPeak(ts_file, out_peak_file):
         sys.stdout.write('Processing line {0:d}\n'.format(row+1))
         sys.stdout.flush()
 
+        # Read TS data
         # y = np.zeros_like(x) + row
         # ts_data = gt.readPixelsGdal(ts_file, x, y)
         ts_data = ts_data_all[row*ts_meta['RasterXSize']:(row+1)*ts_meta['RasterXSize'], :]
 
-        # # Quadratic fitting        
-        # peak_x, peak_y, _, max_y = zip(*[quadPeak(ts_x, ts_data[i, ts_x.astype(int)], no_data=no_data) for i in range(len(x))])
-        # peak_x = np.array(peak_x)
-        # peak_y = np.array(peak_y)
-        # max_y = np.array(max_y)
-        # valid_ind = reduce(np.logical_and, (peak_x>beg_doy-1, peak_x<end_doy-1, peak_y>=max_y, peak_y!=no_data))
-        # peak_y[np.where(np.logical_not(valid_ind))[0]] = no_data
-        # peak_arr[y, x] = peak_y
+        # Quadratic fitting        
+        peak_x, peak_y, _, max_y = zip(*[quadPeak(ts_x, ts_data[i, ts_x.astype(int)], no_data=no_data) for i in range(len(x))])
+        peak_x = np.array(peak_x)
+        peak_y = np.array(peak_y)
+        max_y = np.array(max_y)
+        valid_ind = reduce(np.logical_and, (peak_x>beg_doy-1, peak_x<end_doy-1, peak_y>=max_y, peak_y!=no_data))
+        peak_y[np.where(np.logical_not(valid_ind))[0]] = no_data
+        peak_arr[row, :] = peak_y
 
-        # Simple maximum
-        peak_arr[row, :] = np.max(ts_data, axis=1)
+        # # Simple maximum
+        # peak_arr[row, :] = np.max(ts_data, axis=1)
 
     # Save array of peak values to a raster file
     driver = gdal.GetDriverByName('ENVI')
@@ -91,11 +93,11 @@ def main():
     # ts_file = '/home/zhan/Windows-Shared/Workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI'
     # out_peak_file = '/home/zhan/Windows-Shared/Workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI_quadfit_peak.img'
 
-    # ts_file = '/projectnb/echidna/lidar/zhanli86/workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI'
-    # out_peak_file = '/projectnb/echidna/lidar/zhanli86/workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI_quadfit_peak.img'
+    ts_file = '/projectnb/echidna/lidar/zhanli86/workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI'
+    out_peak_file = '/projectnb/echidna/lidar/zhanli86/workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI_quadfit_peak.img'
 
-    ts_file = '/projectnb/echidna/lidar/zhanli86/workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/fit_NDVI'
-    out_peak_file = '/projectnb/echidna/lidar/zhanli86/workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI_max_peak.img'
+    # ts_file = '/projectnb/echidna/lidar/zhanli86/workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/fit_NDVI'
+    # out_peak_file = '/projectnb/echidna/lidar/zhanli86/workspace/data/projects/kaiyu-adb-crop/vietnam-fusion-ts/predicted_NDVI_max_peak.img'
 
     fitTsPeak(ts_file, out_peak_file)
 
