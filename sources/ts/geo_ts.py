@@ -211,7 +211,7 @@ def pixel2Geo(filename, sample, line):
     proj_coord = pixel2Proj(ds_meta["GeoTransform"], sample, line)
     return proj2Geo(filename, proj_coord[0], proj_coord[1])
 
-def plotTs(doy_list, ts_data_list, point_coords, \
+def plotTs(doy_list, ts_data_list, meta_all, \
            style_list=None, plot_kw_dict_list=None, \
            fig_kw_dict=dict(figsize=(8, 4)), \
            ax_kw_dict=dict(xlabel="DOY", ylabel="Value", xlim=(-1.5, 366.5)), \
@@ -220,7 +220,8 @@ def plotTs(doy_list, ts_data_list, point_coords, \
     
     # valid_flag_list = [np.logical_and(ts_data!=nodata, ts_data>0) for ts_data in ts_data_list]
     valid_flag_list = [ts_data!=nodata for ts_data in ts_data_list]
-    select_keys_list = [np.sum(valid_flag, axis=1)>0 for valid_flag in valid_flag_list]
+    tmp_list = [np.sum(valid_flag, axis=1)>0 for valid_flag in valid_flag_list]
+    select_keys_list = [tmp[tmp].index for tmp in tmp_list]
     ymin = np.nanmin([np.nanmin(ts_data[valid_flag]) for ts_data, valid_flag in itertools.izip(ts_data_list, valid_flag_list)])
     ymax = np.nanmax([np.nanmax(ts_data[valid_flag]) for ts_data, valid_flag in itertools.izip(ts_data_list, valid_flag_list)])
     
@@ -232,12 +233,21 @@ def plotTs(doy_list, ts_data_list, point_coords, \
     
     # sort doy first
     # doy_sort_ind_list = [np.argsort(doy_arr) for doy_arr in doy_list]
-    
-    fig_kw_dict.pop("num", None)
-    for ik, point_key in enumerate(point_coords.index):
-        fig, ax = plt.subplots(num=point_key, **fig_kw_dict)
+
+    fig_key_list = []
+    for ik, point_key in enumerate(meta_all.index):
+        if "num" in fig_kw_dict:
+            # fig, ax = plt.subplots(**fig_kw_dict)
+            fig = plt.figure(**fig_kw_dict)
+            ax = fig.add_subplot(111)
+            fig_key = fig_kw_dict["num"]
+        else:
+            # fig, ax = plt.subplots(num=point_key, **fig_kw_dict)
+            fig = plt.figure(num=point_key, **fig_kw_dict)
+            ax = fig.add_subplot(111)
+            fig_key = point_key
         for n, (doy, ts_data) in enumerate(itertools.izip(doy_list, ts_data_list)):
-            if not select_keys_list[n].loc[point_key]:
+            if not (point_key in select_keys_list[n]):
                 continue
             flag = valid_flag_list[n].loc[point_key, :]
             flag = np.where(flag)[0]
@@ -260,28 +270,35 @@ def plotTs(doy_list, ts_data_list, point_coords, \
         if not ("xlim" in ax_kw_dict):
             ax.set_xlim(-1.5, 366.5)
         if not ("title" in ax_kw_dict):
-            ax.set_title("{0:s}, coordinates: ({1:.6f}, {2:.6f})".format(point_key, point_coords.iloc[ik, 0], \
-                                                                         point_coords.iloc[ik, 1]))
+            ax.set_title("{0:s}, {1:s}".format(point_key, meta_all.loc[point_key]))
         plt.setp(ax, **ax_kw_dict)
 
+        if not use_plotly:
+            if select_doy is not None:
+                for d in select_doy:
+                    ax.plot(np.array([d, d]), ax.get_ylim(), '--k')
+            ax.legend(ncol=2, loc='upper center', bbox_to_anchor=(0.5, -0.15))
+    
+        if not (fig_key in fig_key_list):
+            fig_key_list.append(fig_key)
+
+    for fig_key in fig_key_list:
+        fig = plt.figure(num=fig_key)
         if use_plotly:
             plotly_fig = plotly.tools.mpl_to_plotly(fig)
             plotly_fig['layout']['showlegend'] = True
             plotly_fig['layout']['legend'] = dict(orientation="h")
             iplot(plotly_fig)
         else:
-            plt.figure(point_key)
-            if select_doy is not None:
-                for d in select_doy:
-                    ax.plot(np.array([d, d]), ax.get_ylim(), '--k')
-            ax.legend(ncol=2, loc='upper center', bbox_to_anchor=(0.5, -0.15))
-            if save_fig:
-                if "ylabel" in ax_kw_dict:
-                    ylabel = ax_kw_dict['ylabel']
-                else:
-                    ylabel = "Value"
-                plt.savefig("../figures/ts_{0:s}_{1:s}.png".format(ylabel.lower(), point_key.replace(" ", "_").lower()), \
-                            dpi = dpi, bbox_inches="tight", pad_inches=0.)
+            plt.show()
+
+        if save_fig:
+            if "ylabel" in ax_kw_dict:
+                ylabel = ax_kw_dict['ylabel']
+            else:
+                ylabel = "Value"
+            plt.savefig("../figures/ts_{0:s}_{1:s}.png".format(ylabel.lower(), fig_key.replace(" ", "_").lower()), \
+                        dpi = dpi, bbox_inches="tight", pad_inches=0.)
 
 def drawImages():
     """Export the designated bands of given raster files to easy-to-look
