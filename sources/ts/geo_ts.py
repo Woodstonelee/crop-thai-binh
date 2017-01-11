@@ -7,18 +7,18 @@ import warnings
 import numpy as np
 from osgeo import gdal, gdal_array, osr, ogr
 
-import matplotlib as mpl
-import matplotlib.pyplot as plt
+# import matplotlib as mpl
+# import matplotlib.pyplot as plt
 
-import seaborn as sns
-sns.set_context("paper")
-sns.set_style("whitegrid")
-dpi = 300
+# import seaborn as sns
+# sns.set_context("paper")
+# sns.set_style("whitegrid")
+# dpi = 300
 
-from plotly.offline import download_plotlyjs, init_notebook_mode, plot, iplot
-init_notebook_mode(connected=False) # run at the start of every ipython notebook to use plotly.offline
-                     # this injects the plotly.js source files into the notebook
-import plotly.tools
+# from plotly.offline import download_plotlyjs, init_notebook_mode, plot, iplot
+# init_notebook_mode(connected=False) # run at the start of every ipython notebook to use plotly.offline
+#                      # this injects the plotly.js source files into the notebook
+# import plotly.tools
 
 gdal.AllRegister()
 
@@ -47,12 +47,13 @@ def readPixelGdal(filename, x, y):
 
     return dat
 
-def readPixelsGdal(filename, x=None, y=None):
+def readPixelsGdal(filename, x=None, y=None, band=None):
     """ Reads in multiple pixel of data from an images using GDAL
     Args:
       filename (str): filename to read from
-      x (numpy 1D array): columns
-      y (numpy 1D array): rows
+      x (numpy 1D array): columns, with first pixel being 0
+      y (numpy 1D array): rows, with first pixel being 0
+      band (numpy 1D array): band indices, with first band being 1
     Returns:
       np.ndarray: 2D array (npixel, nband) containing the pixel data
     """
@@ -64,17 +65,24 @@ def readPixelsGdal(filename, x=None, y=None):
     dtype = gdal_array.GDALTypeCodeToNumericTypeCode(
         ds.GetRasterBand(1).DataType)
 
+    if band is None:
+        band = np.arange(ds.RasterCount, dtype=np.int) + 1
+    else:
+        band = np.array(band).astype(int)
+
     if ((x is not None) and (y is not None)):
-        dat = np.empty((len(x), ds.RasterCount), dtype=dtype)
-        for i in range(ds.RasterCount):
-            tmp = ds.GetRasterBand(i + 1).ReadAsArray()
+        x = np.array(x).astype(int)
+        y = np.array(y).astype(int)
+        dat = np.empty((len(x), len(band)), dtype=dtype)
+        for i,ib in enumerate(band):
+            tmp = ds.GetRasterBand(ib).ReadAsArray()
             dat[:, i] = tmp[y, x]
     else:
-        dat = np.empty((ds.RasterXSize*ds.RasterYSize, ds.RasterCount), dtype=dtype)
-        for i in range(ds.RasterCount):
-            tmp = ds.GetRasterBand(i + 1).ReadAsArray()
+        dat = np.empty((ds.RasterXSize*ds.RasterYSize, len(band)), dtype=dtype)
+        for i,ib in enumerate(band):
+            tmp = ds.GetRasterBand(ib).ReadAsArray()
             dat[:, i] = tmp.flatten()
-        
+
     ds = None
 
     return dat
@@ -127,6 +135,8 @@ def getRasterMetaGdal(filename, band_idx=1):
         band = ds.GetRasterBand(band_idx)
         nodata = -9999 if band.GetNoDataValue() is None else band.GetNoDataValue()
         dtype = gdal_array.GDALTypeCodeToNumericTypeCode(band.DataType)
+
+        ds = None
         
         return {"RasterXSize":ncol, "RasterYSize":nrow, "RasterCount":nbands, \
                 "DataType":dtype, "NoDataValue":nodata, \
