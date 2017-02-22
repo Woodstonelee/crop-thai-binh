@@ -3,22 +3,23 @@ import sys
 import itertools
 import glob
 import warnings
+import types
 
 import numpy as np
 from osgeo import gdal, gdal_array, osr, ogr
 
-# import matplotlib as mpl
-# import matplotlib.pyplot as plt
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 
-# import seaborn as sns
-# sns.set_context("paper")
-# sns.set_style("whitegrid")
-# dpi = 300
+import seaborn as sns
+sns.set_context("paper")
+sns.set_style("whitegrid")
+dpi = 300
 
-# from plotly.offline import download_plotlyjs, init_notebook_mode, plot, iplot
-# init_notebook_mode(connected=False) # run at the start of every ipython notebook to use plotly.offline
-#                      # this injects the plotly.js source files into the notebook
-# import plotly.tools
+from plotly.offline import download_plotlyjs, init_notebook_mode, plot, iplot
+init_notebook_mode(connected=False) # run at the start of every ipython notebook to use plotly.offline
+                     # this injects the plotly.js source files into the notebook
+import plotly.tools
 
 gdal.AllRegister()
 
@@ -180,14 +181,18 @@ def pixel2Proj(geoMatrix, sample, line):
     y = line * yDist + ulY
     return (x, y)
 
-def geo2Proj(filename, lon, lat):
+def geo2Proj(filename_or_spatialref, lon, lat):
     """
     Convert geographic coordinates to projected coordinates 
     given the input raster file
     """
-    ds = gdal.Open(filename, gdal.GA_ReadOnly)
-    out_sr = osr.SpatialReference()
-    out_sr.ImportFromWkt(ds.GetProjectionRef())
+    if isinstance(filename_or_spatialref, types.StringTypes):
+        filename = filename_or_spatialref
+        ds = gdal.Open(filename, gdal.GA_ReadOnly)
+        out_sr = osr.SpatialReference()
+        out_sr.ImportFromWkt(ds.GetProjectionRef())
+    else:
+        out_sr = filename_or_spatialref
     in_sr = out_sr.CloneGeogCS()
     coord_trans = osr.CoordinateTransformation(in_sr, out_sr)
     return coord_trans.TransformPoint(lon, lat)[0:2]

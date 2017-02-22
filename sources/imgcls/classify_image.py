@@ -16,7 +16,7 @@ import pandas as pd
 from osgeo import gdal, gdal_array, osr
 
 from sklearn.ensemble import RandomForestClassifier
-from sklearn import cross_validation
+# from sklearn import cross_validation
 from sklearn.preprocessing import StandardScaler
 # from sklearn.cluster import MeanShift
 from sklearn.metrics import confusion_matrix
@@ -43,6 +43,10 @@ class ImageClassifier:
                               label_meta=None, flat_ind=None, \
                               ysrc=None, Xsrc=None)
 
+        self._img_nodata = -9999
+        self._cls_nodata = 0
+        self._clsprob_nodata = -9999
+
     def readImageData(self, img_files, bands=None):
         """Read image data from all the bands of one or mulitiple raster
         files as input to the classification.
@@ -68,7 +72,7 @@ class ImageClassifier:
 
         self.imgdata['Xsrc'] = {'files':img_files, 'bands':bands}
 
-        read_raster_out = [self.readRaster(fname, band=bd) for fname, bd in zip(img_files, bands)]
+        read_raster_out = [self.readRaster(fname, band=bd, out_nodata=self._img_nodata) for fname, bd in zip(img_files, bands)]
         imgdata_list = [rro[0] for rro in read_raster_out]
         self.imgdata['Xsrc']['bands'] = [rro[1] for rro in read_raster_out]
 
@@ -88,7 +92,7 @@ class ImageClassifier:
 
         # Set a 1D array to record the row-major flat indices to pixel
         # locations.
-        self.imgdata['valid_flag'] = np.all(imgdata>0, axis=1)
+        self.imgdata['valid_flag'] = np.all(imgdata!=self._img_nodata, axis=1)
         self.imgdata['X'] = imgdata
         
 
@@ -119,13 +123,23 @@ class ImageClassifier:
             roi_meta, roi_data = self._readEnviRoiAscii(train_file)
             # Now prep the ROI data for training and testing
             if train_X_file is None:
-                self.traindata['X'] = self.imgdata['X'][roi_data['Flat Index'].astype(np.int64), :]
+                self.traindata['X'] = None if self.imgdata['X'] is None else self.imgdata['X'][roi_data['Flat Index'].astype(np.int64), :]
                 self.traindata['y'] = roi_data['Label'].as_matrix().astype(np.int)
                 self.traindata['dims'] = roi_meta['dims']
                 self.traindata['flat_ind'] = roi_data['Flat Index'].astype(np.int64).as_matrix()
                 self.traindata['label_meta'] = {'cls_code':roi_meta['cls_code'], \
-                                             'cls_name':roi_meta['cls_name'], \
-                                             'cls_npts':roi_meta['cls_npts']}
+                                                'cls_name':roi_meta['cls_name'], \
+                                                'cls_npts':roi_meta['cls_npts']}
+        elif fmt == "GTiff ROI":
+            roi_meta, roi_data = self._readGTiffRoi(train_file)
+            if train_X_file is None:
+                self.traindata['X'] = None if self.imgdata['X'] is None else self.imgdata['X'][roi_data['Flat Index'].astype(np.int64), :]
+                self.traindata['y'] = roi_data['Label'].as_matrix().astype(np.int)
+                self.traindata['dims'] = roi_meta['dims']
+                self.traindata['flat_ind'] = roi_data['Flat Index'].astype(np.int64).as_matrix()
+                self.traindata['label_meta'] = {'cls_code':roi_meta['cls_code'], \
+                                                'cls_name':roi_meta['cls_name'], \
+                                                'cls_npts':roi_meta['cls_npts']}
             
 
     def runRandomForest(self, **params):
@@ -153,8 +167,12 @@ class ImageClassifier:
         print "Predicting labels for input images"
         self.imgdata['y'] = np.zeros(len(self.imgdata['X']), dtype=self.traindata['y'].dtype)
         self.imgdata['y'][self.imgdata['valid_flag']] = rf.predict(self.imgdata['X'][self.imgdata['valid_flag'], :])
-        self.imgdata['prob'] = rf.predict_proba(self.imgdata['X'][self.imgdata['valid_flag'], :])
+        self.imgdata['prob'] = self._clsprob_nodata+np.zeros((len(self.imgdata['X']),
+                                                              len(self.traindata['label_meta']['cls_code'])),
+                                                             dtype=np.float32)
+        self.imgdata['prob'][self.imgdata['valid_flag'], :] = rf.predict_proba(self.imgdata['X'][self.imgdata['valid_flag'], :])
         self.estimator = "Random Forest"
+        return rf
 
     def runCrossValidation(self, estimator, test_size=0.25, n_reps=5):
         """Generate training and test datasets from given training pixels and
@@ -321,26 +339,32 @@ class ImageClassifier:
         color_table = cm_used(range(len(np.unique(cls_map))))
 
         driver = gdal.GetDriverByName(fmt)
-        out_ds = driver.Create(out_cls_file, \
-                               cls_map.shape[1], cls_map.shape[0], 1, \
-                               gdal_array.NumericTypeCodeToGDALTypeCode(cls_map.dtype.type))
+        if fmt == "ENVI":
+            out_ds = driver.Create(out_cls_file, \
+                                   cls_map.shape[1], cls_map.shape[0], 1, \
+                                   gdal_array.NumericTypeCodeToGDALTypeCode(cls_map.dtype.type))
+        else:
+            cls_map = cls_map.astype(np.float32)
+            ncls = self.imgdata['prob'].shape[1]
+            out_ds = driver.Create(out_cls_file, \
+                                   cls_map.shape[1], cls_map.shape[0], 1+ncls, \
+                                   gdal_array.NumericTypeCodeToGDALTypeCode(cls_map.dtype.type))
+            
         out_band = out_ds.GetRasterBand(1)
         out_band.WriteArray(cls_map)
         out_band.SetCategoryNames(["no_data"]+[cn for cn in self.traindata['label_meta']['cls_name']]) # set the class names
         out_band.SetDescription("Classification by {0:s}".format(self.estimator)) # set band name
-        out_band.SetNoDataValue(0)
-        out_ct = gdal.ColorTable()
-        for i in range(len(color_table)):
-            out_ct.SetColorEntry(i, tuple((color_table[i, :]*255).astype(np.int)))
-        out_band.SetColorTable(out_ct)
+        out_band.SetNoDataValue(self._cls_nodata)
+        if fmt == "ENVI":
+            out_ct = gdal.ColorTable()
+            for i in range(len(color_table)):
+                out_ct.SetColorEntry(i, tuple((color_table[i, :]*255).astype(np.int)))
+            out_band.SetColorTable(out_ct)
         out_band.FlushCache()
-
-        out_ds.SetGeoTransform(raster_profile['GeoTransform'])
-        out_ds.SetProjection(raster_profile['ProjectionRef'])
 
         if fmt == "ENVI":
             bands_str = [str(b).replace('[', '"').replace(']', '"') for b in self.imgdata['Xsrc']['bands']]
-            envi_meta_dict = dict(data_ignore_value="0", \
+            envi_meta_dict = dict(data_ignore_value=str(self._cls_nodata), \
                                   images_for_classification="{{{0:s}}}".format(", ".join(self.imgdata['Xsrc']['files'])), \
                                   bands_for_classification="{{{0:s}}}".format(", ".join(bands_str)))
             print self.imgdata['Xsrc']['files']
@@ -348,9 +372,37 @@ class ImageClassifier:
             print envi_meta_dict
             for kw in envi_meta_dict.keys():
                 out_ds.SetMetadataItem(kw, envi_meta_dict[kw], "ENVI")
+        else:
+            for icls in range(ncls):
+                cls_map_prob = np.zeros((self.imgdata['dims'][0], self.imgdata['dims'][1]), dtype=np.float32)
+                cls_map_prob.flat[:] = self.imgdata['prob'][:, icls].astype(np.float32)
+                out_band = out_ds.GetRasterBand(icls+1+1)
+                out_band.WriteArray(cls_map_prob)
+                out_band.SetDescription("Probability of {0:s} by {1:s}".format(self.traindata['label_meta']['cls_name'][icls], self.estimator))
+                out_band.SetNoDataValue(self._clsprob_nodata)
+                out_band.FlushCache()
+
+        out_ds.SetGeoTransform(raster_profile['GeoTransform'])
+        out_ds.SetProjection(raster_profile['ProjectionRef'])
         
         out_ds = None
+
+    def writeRandomForestDiagnosis(self, rf_estimator, diagnosis_file):
+        bands_str = [str(b).replace('[', '"').replace(']', '"') for b in self.imgdata['Xsrc']['bands']]
+        images_for_classification="{{{0:s}}}".format(", ".join(self.imgdata['Xsrc']['files']))
+        bands_for_classification="{{{0:s}}}".format(", ".join(bands_str))
         
+        with open(diagnosis_file, "w") as outfobj:
+            outfobj.write("# Classification Diagnosis Information for the Classifier {0:s}\n".format(self.estimator))
+            outfobj.write("## Out-of-bag score = {0:.6f}\n".format(rf_estimator.oob_score_))
+            outfobj.write("## Number of input features = {0:d} \n".format(rf_estimator.n_features_))
+            outfobj.write("feature_id,feature_importance,raster_file,raster_band\n")
+            i_feature = 0
+            for fname, bdlist in zip(self.imgdata['Xsrc']['files'], self.imgdata['Xsrc']['bands']):
+                for bd in bdlist:
+                    outfobj.write("{0:d},{1:.6f},{2:s},{3:d}\n".format(i_feature+1, rf_estimator.feature_importances_[i_feature], fname, bd))
+                    i_feature = i_feature + 1
+            
 
     def _readEnviRoiAscii(self, envi_roi_file):
         """Read ENVI ROI ASCII file. 
@@ -359,7 +411,7 @@ class ImageClassifier:
                         File name of ENVI ROI ASCII data.
         Returns:    **roi_meta**, *dict*
                         Metadata of the ROI data file.
-                    **roi_data**, *array_like*
+                    **roi_data**, *pandas DataFrame*
                         ROI data
         """
         # Read metadata from the beginning of the ASCII file.
@@ -392,11 +444,14 @@ class ImageClassifier:
 
         roi_data = pd.read_table(envi_roi_file, header=None, delim_whitespace=True, comment=';', usecols=[0, 1, 2, 3, 4, 5, 6])
         roi_data.columns = ["ID", "X", "Y", "Map X", "Map Y", "Lat", "Lon"]
-
+        # ENVI ROI pixel location with first being 1, here we convert to numpy convention with first being 0
+        roi_data["X"] = roi_data["X"] - 1 
+        roi_data["Y"] = roi_data["Y"] - 1 
 
         roi_data['Label'] = pd.Series(np.zeros(roi_data.shape[0]), roi_data.index)
-        roi_data['Flat Index'] = pd.Series(np.zeros(roi_data.shape[0]), roi_data.index) # as X and Y, with first being 1.
-        roi_data['Flat Index'] = (roi_data['Y'] - 1) * roi_meta['dims'][1] + roi_data['X']
+        roi_data['Flat Index'] = pd.Series(np.zeros(roi_data.shape[0]), roi_data.index) # as X and Y, with first being 0.
+        # roi_data['Flat Index'] = (roi_data['Y'] - 0) * roi_meta['dims'][1] + roi_data['X']
+        roi_data['Flat Index'] = np.ravel_multi_index((roi_data["Y"], roi_data["X"]), roi_meta["dims"], order="C")
 
         end_ind = np.cumsum(roi_meta['cls_npts'])
         beg_ind = np.concatenate((np.array([0]), end_ind[0:-1]))
@@ -405,9 +460,45 @@ class ImageClassifier:
         for n, (bi, ei) in enumerate(zip(beg_ind, end_ind)):
             roi_data.iloc[bi:ei, col_ind['Label']] = np.zeros((ei-bi))+n+1
 
+        return roi_meta, roi_data.loc[:, ["X", "Y", "Flat Index", "Label"]]
+
+    def _readGTiffRoi(self, gtiff_file):
+        """Read Geotiff ROI training file. 
+
+        Parameters: **gtiff_file**, *str*
+                        File name of Geotiff ROI training data.
+        Returns:    **roi_meta**, *dict*
+                        Metadata of the ROI data file.
+                    **roi_data**, *pandas DataFrame*
+                        ROI data
+        """
+        # Read metadata from the beginning of the ASCII file.
+        header_ind = 0
+        roi_meta = dict()
+
+        # Open the geotiff file and read the class label image
+        raster_profile = self.getRasterProfile(gtiff_file)
+        raster_data, _ = self.readRaster(gtiff_file, [1],
+                                         out_nodata=raster_profile["NoDataValue"][0])
+        raster_data = raster_data[0]
+        
+        valid_ind = np.where(raster_data != raster_profile["NoDataValue"][0])
+        roi_meta['dims'] = (raster_profile["RasterYSize"], raster_profile["RasterXSize"])
+        roi_meta['cls_code'], roi_meta['cls_npts'] = np.unique(raster_data[valid_ind], return_counts=True)
+        roi_meta['cls_name'] = [str(cc) if raster_profile["CategoryNames"][0] is None else raster_profile["CategoryNames"][0][cc] for cc in roi_meta['cls_code']]
+        roi_meta['ncls'] = len(roi_meta['cls_code'])
+        
+        npts_train = np.sum(roi_meta['cls_npts'])
+        roi_data = pd.DataFrame(np.zeros((npts_train, 4)), columns=["X", "Y", "Flat Index", "Label"])
+        roi_data.loc[:, "Y"] = valid_ind[0]
+        roi_data.loc[:, "X"] = valid_ind[1]
+        # roi_data.loc[:, "Flat Index"] = (roi_data['Y'] - 0) * roi_meta['dims'][1] + roi_data['X']
+        roi_data['Flat Index'] = np.ravel_multi_index((roi_data["Y"], roi_data["X"]), roi_meta["dims"], order="C")
+        roi_data.loc[:, "Label"] = raster_data[valid_ind]
+
         return roi_meta, roi_data
         
-    def readRaster(self, filename, band=None):
+    def readRaster(self, filename, band=None, out_nodata=-9999):
         """ Reads in a band from an images using GDAL
         Args:
           filename (str): filename to read from
@@ -417,6 +508,7 @@ class ImageClassifier:
           dat (sequence of numpy 2D array): each list element is a band from the input image file.
           band (numpy 1d array): list of bands read to the *dat*
         """
+        raster_profile = self.getRasterProfile(filename)
         ds = gdal.Open(filename, gdal.GA_ReadOnly)
         if ds is None:
             sys.stderr.write("Failed to open the file {0:s}\n".format(filename))
@@ -427,7 +519,9 @@ class ImageClassifier:
 
         dat = [None for b in band]
         for n, b in enumerate(band):
-            dat[n-1] = ds.GetRasterBand(b).ReadAsArray()
+            dat[n] = ds.GetRasterBand(b).ReadAsArray()
+            tmp_ind = np.where(dat[n] == raster_profile["NoDataValue"][b-1])
+            dat[n][tmp_ind] = out_nodata
 
         ds = None
 
@@ -459,12 +553,14 @@ class ImageClassifier:
         metadata = {dm:ds.GetMetadata(dm) for dm in ds.GetMetadataDomainList()}
 
         bands = [ds.GetRasterBand(idx+1) for idx in range(nbands)]
-        nodata = [-9999 if b.GetNoDataValue() is None else b.GetNoDataValue() for b in bands]
+        nodata = [self._img_nodata if b.GetNoDataValue() is None else b.GetNoDataValue() for b in bands]
+        category_names = [b.GetCategoryNames() for b in bands]
         dtype = [gdal_array.GDALTypeCodeToNumericTypeCode(b.DataType) for b in bands]
 
-        return {"RasterXSize":ncol, "RasterYSize":nrow, "RasterCount":nbands, \
-                "DataType":dtype, "NoDataValue":nodata, \
-                "GeoTransform":geo_trans, "ProjectionRef":proj_ref, \
+        return {"RasterXSize":ncol, "RasterYSize":nrow,
+                "RasterCount":nbands, "DataType":dtype,
+                "NoDataValue":nodata, "CategoryNames":category_names,
+                "GeoTransform":geo_trans, "ProjectionRef":proj_ref,
                 "Metadata":metadata}
 
 def getCmdArgs():
@@ -473,12 +569,14 @@ def getCmdArgs():
     p.add_argument("-i", '--images', dest="images", required=True, nargs='+', default=None, help="One or multiple image raster files to classify.")
     p.add_argument("-b", '--bands', dest="bands", required=False, nargs='*', default=None, help="One or multiple sequences of band indices to use for each image, with band indices within a sequence separated by ',' and different sequences separated by space. Default: None which uses all the bands of each image. Example for three images: --bands 1,2 2 2,3,4,5")
 
-    p.add_argument('--trainF', dest="trainF", required=True, choices=['1', '2'], help="Format of training data, with the following choices, \n\t1: ENVI ROI ASCII\n\t2: GTiff")
+    p.add_argument('--trainF', dest="trainF", required=True, choices=['1', '2'], help="Format of training data, with the following choices, \n\t1: ENVI ROI ASCII\n\t2: GTiff ROI")
     p.add_argument('--train', dest="train", required=True, default=None, help="Training data file of known labels of training pixels.")
-    p.add_argument('--trainX', dest="trainX", required=False, default=None, help="")
+    p.add_argument('--trainX', dest="trainX", required=False, default=None, help="Multi-band raster file to provide the same features as the input images and bands for training samples.")
 
     p.add_argument("-c", '--classification', dest="cls", required=True, default=None, help="Classification file to output.")
     p.add_argument("--clsF", dest="clsF", required=False, default="ENVI", help="Raster format of the output file to write classification to. Default: ENVI.")
+
+    p.add_argument("--diagnosis", dest="diagnosis", required=False, default=None, help="Ascii file name to output classification diagnosis information.")
 
     cmdargs = p.parse_args()
 
@@ -492,7 +590,7 @@ def main(cmdargs):
         bands = None
 
     train_fmt = {'1':"ENVI ROI ASCII", \
-                 '2':"GTiff"}
+                 '2':"GTiff ROI"}
 
     ic = ImageClassifier()
 
@@ -503,17 +601,32 @@ def main(cmdargs):
     ic.readTrainingData(cmdargs.train, fmt=train_fmt[cmdargs.trainF])
 
     print "Running cross validation for preliminary accuracy guess ..."
-    rf = RandomForestClassifier(n_estimators=100, n_jobs=-1, oob_score=True)
-    con_mat, ntrain, ntest = ic.runCrossValidation(rf, test_size=0.5, n_reps=10)
+    rf = RandomForestClassifier(n_estimators=100, n_jobs=-1, oob_score=True, class_weight=None)
+    cv_reps = 10
+    con_mat, ntrain, ntest = ic.runCrossValidation(rf, test_size=0.5, n_reps=cv_reps)
     print "Cross validation using {0:d} training pixels and {1:d} test pixels".format(ntrain, ntest)
     print "Confusion matrix for the test pixels"
     print con_mat
 
-    # print "Running classification ..."
-    # ic.runRandomForest(n_estimators=100, n_jobs=-1, oob_score=True)
+    print "Running classification ..."
+    rf = ic.runRandomForest(n_estimators=100, n_jobs=-1, oob_score=True, class_weight=None)
 
-    # print "Writing classification results ..."
-    # ic.writeClassData(cmdargs.cls, fmt=cmdargs.clsF)
+    print "Writing classification results ..."
+    ic.writeClassData(cmdargs.cls, fmt=cmdargs.clsF)
+
+    if cmdargs.diagnosis is not None:
+        print "Writing classification diagnosis information ..."
+        ic.writeRandomForestDiagnosis(rf, cmdargs.diagnosis)
+        with open(cmdargs.diagnosis, "a") as outfobj:
+            outfobj.write("\n## Training Random Forest Classifier with settings:\n")
+            outfobj.write("{0:s}\n".format(str(rf)))
+            outfobj.write("## Number of cross validation = {0:d}\n".format(cv_reps))
+            outfobj.write("## Mean number of training samples = {0:d}\n".format(ntrain))
+            outfobj.write("## Mean number of testing samples = {0:d}\n".format(ntest))
+            outfobj.write("## Mean confusion matrix = \n".format())
+            for r in range(con_mat.shape[0]):
+                fmt_str = ",".join(["{{0[{0:d}]:.3f}}".format(j) for j in range(con_mat.shape[1])])+"\n"
+                outfobj.write(fmt_str.format(con_mat[r, :]))
 
 if __name__ == "__main__":
     cmdargs = getCmdArgs()
